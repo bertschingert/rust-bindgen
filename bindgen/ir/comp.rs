@@ -10,7 +10,7 @@ use super::item::{IsOpaque, Item};
 use super::layout::Layout;
 use super::template::TemplateParameters;
 use super::traversal::{EdgeKind, Trace, Tracer};
-use super::ty::RUST_DERIVE_IN_ARRAY_LIMIT;
+use super::ty::{RUST_DERIVE_IN_ARRAY_LIMIT, TypeKind};
 use crate::clang;
 use crate::codegen::struct_layout::{align_to, bytes_from_bits_pow2};
 use crate::ir::derive::CanDeriveCopy;
@@ -1049,6 +1049,12 @@ pub(crate) struct CompInfo {
     /// Used to indicate when a struct has been forward declared. Usually used
     /// in headers so that APIs can't modify them directly.
     is_forward_declaration: bool,
+
+    /// Whether this type requires an explicit alignment attribute
+    explicit_align: bool,
+
+    /// Whether this type has a child type with an explicit alignment attribute
+    child_with_explicit_align: bool,
 }
 
 impl CompInfo {
@@ -1072,6 +1078,8 @@ impl CompInfo {
             packed_attr: false,
             found_unknown_attr: false,
             is_forward_declaration: false,
+            explicit_align: false,
+            child_with_explicit_align: false,
         }
     }
 
@@ -1235,6 +1243,7 @@ impl CompInfo {
         ty: &clang::Type,
         location: Option<clang::Cursor>,
         ctx: &mut BindgenContext,
+        outer_layout: Option<&mut Layout>,
     ) -> Result<Self, ParseError> {
         use clang_sys::*;
         assert!(
@@ -1252,6 +1261,7 @@ impl CompInfo {
         }
 
         let kind = kind?;
+        let mut max_field_align: Option<usize> = None;
 
         debug!("CompInfo::from_ty({:?}, {:?})", kind, cursor);
 
@@ -1329,6 +1339,27 @@ impl CompInfo {
                         Some(potential_id),
                         ctx,
                     );
+
+                    let field_layout = ctx.resolve_type(field_type).layout(ctx);
+                    let field_comp_type = ctx.resolve_type(field_type);
+
+                    match field_comp_type.kind() {
+                        TypeKind::ResolvedTypeRef(inner_type) => {
+                            let inner_type = ctx.resolve_type(*inner_type);
+                            if let Some(inner_type) = inner_type.as_comp() {
+                                if inner_type.explicit_align ||
+                                    inner_type.child_with_explicit_align {
+                                    ci.child_with_explicit_align = true;
+                                }
+                            }
+                        },
+                        _ => {},
+                    }
+
+                    if let Some(field_layout) = field_layout {
+                        max_field_align = Some(cmp::max(max_field_align.unwrap_or(0),
+                                                        field_layout.align));
+                    }
 
                     let comment = cur.raw_comment();
                     let annotations = Annotations::new(&cur);
@@ -1566,6 +1597,14 @@ impl CompInfo {
             CXChildVisit_Continue
         });
 
+        if let Some(outer_layout) = outer_layout {
+            if let Some(max_field_align) = max_field_align {
+                if outer_layout.align > max_field_align {
+                    ci.explicit_align = true;
+                }
+            }
+        }
+
         if let Some((ty, _, public, offset)) = maybe_anonymous_struct_field {
             let field =
                 RawField::new(None, ty, None, None, None, public, offset);
@@ -1665,6 +1704,11 @@ impl CompInfo {
     /// Returns true if compound type has been forward declared
     pub(crate) fn is_forward_declaration(&self) -> bool {
         self.is_forward_declaration
+    }
+
+    /// Returns true if compound type has a child type with an explicit alignment attribute
+    pub(crate) fn child_with_explicit_align(&self) -> bool {
+        self.child_with_explicit_align
     }
 
     /// Compute this compound structure's bitfield allocation units.

@@ -52,6 +52,15 @@ impl Type {
         }
     }
 
+    /// Get the underlying `CompInfo` for this type as an immutable reference, or
+    /// `None` if this is some other kind of type.
+    pub(crate) fn as_comp(&self) -> Option<&CompInfo> {
+        match self.kind {
+            TypeKind::Comp(ref ci) => Some(ci),
+            _ => None,
+        }
+    }
+
     /// Construct a new `Type`.
     pub(crate) fn new(
         name: Option<String>,
@@ -690,7 +699,7 @@ impl Type {
             }
         }
 
-        let layout = ty.fallible_layout(ctx).ok();
+        let mut layout = ty.fallible_layout(ctx).ok();
         let cursor = ty.declaration();
         let is_anonymous = cursor.is_anonymous();
         let mut name = if is_anonymous {
@@ -806,6 +815,7 @@ impl Type {
                             ty,
                             Some(location),
                             ctx,
+                            None,
                         )
                         .expect("C'mon");
                         TypeKind::Comp(complex)
@@ -868,6 +878,7 @@ impl Type {
                                     ty,
                                     Some(location),
                                     ctx,
+                                    None,
                                 );
                                 match complex {
                                     Ok(complex) => TypeKind::Comp(complex),
@@ -1134,6 +1145,7 @@ impl Type {
                         ty,
                         Some(location),
                         ctx,
+                        layout.as_mut(),
                     )
                     .expect("Not a complex type?");
 

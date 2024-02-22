@@ -2202,7 +2202,8 @@ impl CodeGenerator for CompInfo {
         // "packed" attr is redundant, and do not include it if so.
         if packed &&
             !is_opaque &&
-            !(explicit_align.is_some() &&
+            !((self.child_with_explicit_align() ||
+                explicit_align.is_some()) &&
                 self.already_packed(ctx).unwrap_or(false))
         {
             let n = layout.map_or(1, |l| l.align);
